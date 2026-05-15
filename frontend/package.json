@@ -13,6 +13,7 @@
     "@capacitor/android": "^8.3.3",
     "@capacitor/cli": "^8.3.3",
     "@capacitor/core": "^8.3.3",
+    "@supabase/supabase-js": "^2.105.4",
     "axios": "^1.16.0",
     "lucide-react": "^1.14.0",
     "react": "^19.2.5",

@@ -18,7 +18,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download NLTK data so it's baked into the image
-RUN python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('punkt_tab')"
+RUN python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
 
 COPY . .
 
