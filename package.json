@@ -2,7 +2,7 @@
   "name": "news-aggregator",
   "version": "1.0.0",
   "scripts": {
-    "start": "node server.js"
+    "start": "python backend/main.py"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4"
