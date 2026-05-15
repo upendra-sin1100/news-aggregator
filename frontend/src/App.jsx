@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import './App.css'
 import getSupabaseClient from './lib/supabase'
 
-const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+const API = 'https://news-aggregator-production-0bfb.up.railway.app'
 const REFRESH_INTERVAL = 5 * 60 * 1000 // 5 minutes
 
 // ── Toast System ──────────────────────────────────────────
