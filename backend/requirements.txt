@@ -9,6 +9,4 @@ nltk>=3.8.0
 requests>=2.31.0
 lxml>=4.9.0
 supabase
-
-# Note: `newsplease` was removed because the requested PyPI version was unavailable.
-# If you need it, install from its GitHub repo or pin a known-good source.
+lxml-html-clean
