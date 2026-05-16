@@ -1232,36 +1232,38 @@ body {
 
   /* Header */
   .site-header {
-    padding: 16px 0 0;
+    padding: 12px 0 0;
   }
 
   .header-top {
     flex-direction: row;
     align-items: center;
     flex-wrap: nowrap;
-    gap: 10px;
-    padding: 0 16px;
-    margin-bottom: 12px;
-  }
-
-  .header-logo {
-    gap: 10px;
-    min-width: 0;
+    gap: 8px;
+    padding: 0 12px;
+    margin-bottom: 10px;
   }
 
   .logo-mark {
-    width: 36px;
-    height: 36px;
-    font-size: 13px;
+    width: 32px;
+    height: 32px;
+    font-size: 12px;
     flex-shrink: 0;
   }
 
   .logo-title {
-    font-size: 18px;
+    font-size: 16px;
   }
 
   .logo-sub {
     display: none;
+  }
+
+  /* Hide logo text entirely on very small screens */
+  @media (max-width: 400px) {
+    .logo-text {
+      display: none;
+    }
   }
 
   /* Search & controls */
@@ -1293,25 +1295,40 @@ body {
     flex-shrink: 0;
   }
 
-  /* Tabs */
+  /* Tabs — tighter on mobile */
   .genre-tabs {
-    padding: 0 16px 0;
+    padding: 0 12px;
     gap: 0;
   }
 
   .tab-btn {
-    padding: 10px 12px;
+    padding: 8px 10px;
+    font-size: 10px;
+    min-height: 40px;
+  }
+
+  .more-btn {
+    min-width: unset;
+    gap: 3px;
+  }
+
+  .more-btn__label {
+    display: none;
+  }
+
+  .more-btn__value {
     font-size: 11px;
-    min-height: 44px;
   }
 
   .tab-divider {
-    margin: 0 4px;
+    margin: 0 2px;
   }
 
-  /* Sort pills row — allow wrapping */
+  /* Hide sort pills on mobile — move to second row */
   .sort-pills {
-    gap: 5px;
+    padding: 6px 12px;
+    border-top: 1px solid var(--border);
+    gap: 6px;
   }
 
   .sort-pill {
@@ -1359,25 +1376,29 @@ body {
   }
 
   /* Grid cards */
+  /* Grid cards — 1 column on mobile */
   .news-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
+    grid-template-columns: 1fr;
+    gap: 14px;
   }
 
   .card--grid .card__img-wrap {
-    height: 120px;
+    height: 180px;
   }
 
   .card__body {
-    padding: 12px 12px 10px;
+    padding: 14px 14px 12px;
   }
 
   .card__title {
-    font-size: 14px;
+    font-size: 16px;
   }
 
   .card__desc--grid {
-    display: none;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   .card__source {
@@ -1456,21 +1477,4 @@ body {
   }
 }
 
-/* Very small phones */
-@media (max-width: 380px) {
-  .news-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .card--grid .card__img-wrap {
-    height: 160px;
-  }
-
-  .card__desc--grid {
-    display: -webkit-box;
-    line-clamp: 2;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-}
+/* Very small phones: removed — handled by 640px breakpoint */
