@@ -1,6 +1,10 @@
 # UpFeed – AI-Powered News Aggregator
 
+[![Live Demo](https://img.shields.io/badge/Live-Demo-brightgreen.svg)](https://up-feed.vercel.app/)
+
 A full-stack news aggregation and reading app that pulls trending stories from Reddit, extracts & summarizes articles, and lets users save bookmarks to collections.
+
+**Live deployment:** [https://up-feed.vercel.app/](https://up-feed.vercel.app/)
 
 ## Features
 
