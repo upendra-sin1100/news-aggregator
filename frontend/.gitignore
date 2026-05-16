@@ -19,6 +19,10 @@ frontend/dist/
 *.log
 npm-debug.log*
 
+# Local Vite env files
+.env.local
+.env.*.local
+
 # IDE
 .vscode/
 .idea/
