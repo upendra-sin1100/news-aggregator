@@ -28,6 +28,12 @@ SUPABASE_KEY = (
 
 CACHE_TTL_SECONDS = 5 * 60 * 60  # 5 hours
 
+DEFAULT_REQUEST_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
 # ── CATEGORY MAP ─────────────────────────────────────────────────────────────
 # Maps frontend slug → (newsapi_category, gnews_topic, reddit_subreddit)
 CATEGORY_MAP = {
@@ -85,6 +91,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://up-feed.vercel.app",
+        "https://upfeed.onrender.com",
         "http://localhost:5173",
         "http://localhost:3000",
     ],
@@ -110,7 +117,7 @@ def _fetch_newsapi(category: str, page: int = 1, page_size: int = 20):
         f"&apiKey={NEWSAPI_KEY}"
     )
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
         data = r.json()
         articles = []
         for a in data.get("articles", []):
@@ -143,7 +150,7 @@ def _fetch_gnews(category: str, page: int = 1):
         f"&token={GNEWS_KEY}"
     )
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
         data = r.json()
         articles = []
         for a in data.get("articles", []):
@@ -175,7 +182,7 @@ def _fetch_reddit(category: str, sort: str = "hot", limit: int = 20, after: str 
         url += f"&after={after}"
     headers = {"User-Agent": "UpFeedApp/1.0"}
     try:
-        r = requests.get(url, headers=headers, timeout=10)
+        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
         data = r.json()
         raw = data.get("data", {})
         articles = []
@@ -346,7 +353,7 @@ def search_news(
                 f"?q={requests.utils.quote(q)}&language=en&sortBy=relevancy&pageSize={limit}"
                 f"&apiKey={NEWSAPI_KEY}"
             )
-            r = requests.get(url, timeout=10)
+            r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
             data = r.json()
             for a in data.get("articles", []):
                 if not a.get("url") or a.get("title") == "[Removed]":
@@ -372,7 +379,7 @@ def search_news(
                 f"?q={requests.utils.quote(q)}&lang=en&max=10"
                 f"&token={GNEWS_KEY}"
             )
-            r = requests.get(url, timeout=10)
+            r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
             data = r.json()
             for a in data.get("articles", []):
                 add([{
@@ -391,7 +398,7 @@ def search_news(
     # Reddit search fallback
     try:
         url = f"https://www.reddit.com/search.json?q={requests.utils.quote(q)}&sort=relevance&limit=15&type=link"
-        r = requests.get(url, headers={"User-Agent": "UpFeedApp/1.0"}, timeout=10)
+        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
         data = r.json()
         for post in data.get("data", {}).get("children", []):
             s = post.get("data", {})
@@ -431,7 +438,7 @@ def read_and_summarize(req: ArticleRequest):
         try:
             article.download()
         except Exception:
-            resp = requests.get(req.url, headers={"User-Agent": "UpFeedApp/1.0"}, timeout=10)
+            resp = requests.get(req.url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
             resp.raise_for_status()
             article.set_html(resp.text)
         article.parse()
