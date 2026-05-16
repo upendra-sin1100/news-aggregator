@@ -222,10 +222,6 @@ docker-compose up
 2. Deploy frontend to Vercel, Netlify, or GitHub Pages
 3. Update `.env` variables in production
 
-## License
-
-MIT
-
 ## Contributing
 
 Feel free to submit issues and PRs!
