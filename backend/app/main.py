@@ -9,6 +9,7 @@ import nltk
 import json
 import time
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
@@ -27,6 +28,8 @@ SUPABASE_KEY = (
 )
 
 CACHE_TTL_SECONDS = 5 * 60 * 60  # 5 hours
+PAGE_SIZE = 20
+REQUEST_TIMEOUT_SECONDS = 5
 
 DEFAULT_REQUEST_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -34,18 +37,42 @@ DEFAULT_REQUEST_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# ── CATEGORY MAP ─────────────────────────────────────────────────────────────
-# Maps frontend slug → (newsapi_category, gnews_topic, reddit_subreddit)
-CATEGORY_MAP = {
-    "technology":      ("technology",  "technology",  "technology"),
-    "world":           ("general",     "world",       "worldnews"),
-    "science":         ("science",     "science",     "science"),
-    "business":        ("business",    "business",    "business"),
-    "health":          ("health",      "health",      "health"),
-    "sports":          ("sports",      "sports",      "sports"),
-    "entertainment":   ("entertainment","entertainment","entertainment"),
-    "politics":        ("general",     "nation",      "politics"),
+# Reddit blocks generic browser User-Agents for unauthenticated JSON requests
+REDDIT_HEADERS = {
+    "User-Agent": "UpFeed_App/1.0 (by /u/UpFeed)",
+    "Accept": "application/json",
 }
+
+# ── CATEGORY MAP ─────────────────────────────────────────────────────────────
+# Maps frontend slug → (newsapi_category, gnews_topic, reddit_subreddit, newsapi_q)
+# newsapi_q is an optional keyword query for categories not natively in NewsAPI
+CATEGORY_MAP = {
+    "technology":    ("technology",  "technology",    "technology",      None),
+    "world":         ("general",     "world",         "worldnews",       None),
+    "science":       ("science",     "science",       "science",         None),
+    "business":      ("business",    "business",      "business",        None),
+    "health":        ("health",      "health",        "health",          None),
+    "sports":        ("sports",      "sports",        "sports",          None),
+    "entertainment": ("entertainment","entertainment", "entertainment",   None),
+    "politics":      ("general",     "nation",        "politics",        None),
+    # ── New categories ──
+    "india":         ("general",     "nation",        "indianews",       "india"),
+    # Keep search keywords simple to prevent HTTP 400 on Free-Tier News APIs
+    "stock-market":  ("business",    "business",      "StockMarket",     "stock market"),
+    "gaming":        ("technology",  "technology",    "Games",           "gaming"),
+    "environment":   ("science",     "science",       "environment",     "environment"),
+    "cryptocurrency":("business",    "business",      "CryptoMarkets",   "cryptocurrency"),
+    "automobile":    ("general",     "world",         "cars",            "automobile"),
+}
+
+CATEGORY_ALIASES = {
+    "crypto": "cryptocurrency",
+    "stockmarket": "stock-market",
+}
+
+
+def _normalize_category(category: str) -> str:
+    return CATEGORY_ALIASES.get(category, category)
 
 # ── LOCAL HELPERS ─────────────────────────────────────────────────────────────
 def _load_json(path):
@@ -93,7 +120,10 @@ app.add_middleware(
         "https://up-feed.vercel.app",
         "https://upfeed.onrender.com",
         "http://localhost:5173",
+        "http://localhost:5174",
         "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -106,18 +136,31 @@ def read_root():
 
 # ── NEWS FETCHERS ─────────────────────────────────────────────────────────────
 
-def _fetch_newsapi(category: str, page: int = 1, page_size: int = 20):
+def _fetch_newsapi(category: str, page: int = 1, page_size: int = PAGE_SIZE):
     """Fetch from NewsAPI.org — best quality, 100 req/day free."""
     if not NEWSAPI_KEY:
         return []
-    newsapi_cat = CATEGORY_MAP.get(category, ("general", "world", "worldnews"))[0]
-    url = (
-        f"https://newsapi.org/v2/top-headlines"
-        f"?category={newsapi_cat}&language=en&pageSize={page_size}&page={page}"
-        f"&apiKey={NEWSAPI_KEY}"
-    )
+    category = _normalize_category(category)
+    cat_tuple = CATEGORY_MAP.get(category, ("general", "world", "worldnews", None))
+    newsapi_cat = cat_tuple[0]
+    keyword_q   = cat_tuple[3] if len(cat_tuple) > 3 else None
+
     try:
-        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
+        if keyword_q:
+            # Use /everything for keyword-based categories
+            url = (
+                f"https://newsapi.org/v2/everything"
+                f"?q={requests.utils.quote(keyword_q)}&language=en"
+                f"&sortBy=publishedAt&pageSize={page_size}&page={page}"
+                f"&apiKey={NEWSAPI_KEY}"
+            )
+        else:
+            url = (
+                f"https://newsapi.org/v2/top-headlines"
+                f"?category={newsapi_cat}&language=en&pageSize={page_size}&page={page}"
+                f"&apiKey={NEWSAPI_KEY}"
+            )
+        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
         data = r.json()
         articles = []
         for a in data.get("articles", []):
@@ -133,6 +176,28 @@ def _fetch_newsapi(category: str, page: int = 1, page_size: int = 20):
                 "published_at": a.get("publishedAt", ""),
                 "score": 0,
             })
+
+        if not articles and keyword_q:
+            fallback_url = (
+                f"https://newsapi.org/v2/top-headlines"
+                f"?category={newsapi_cat}&language=en&pageSize={page_size}&page={page}"
+                f"&apiKey={NEWSAPI_KEY}"
+            )
+            r = requests.get(fallback_url, headers=DEFAULT_REQUEST_HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
+            data = r.json()
+            for a in data.get("articles", []):
+                if not a.get("url") or a.get("title") == "[Removed]":
+                    continue
+                articles.append({
+                    "id": a.get("url"),
+                    "title": a.get("title", ""),
+                    "url": a.get("url", ""),
+                    "image_url": a.get("urlToImage"),
+                    "source": a.get("source", {}).get("name", "NewsAPI"),
+                    "description": a.get("description", ""),
+                    "published_at": a.get("publishedAt", ""),
+                    "score": 0,
+                })
         return articles
     except Exception as e:
         print(f"NewsAPI error: {e}")
@@ -143,14 +208,25 @@ def _fetch_gnews(category: str, page: int = 1):
     """Fetch from GNews — 100 req/day free, good variety."""
     if not GNEWS_KEY:
         return []
-    gnews_topic = CATEGORY_MAP.get(category, ("general", "world", "worldnews"))[1]
-    url = (
-        f"https://gnews.io/api/v4/top-headlines"
-        f"?topic={gnews_topic}&lang=en&max=10&page={page}"
-        f"&token={GNEWS_KEY}"
-    )
+    category = _normalize_category(category)
+    cat_tuple  = CATEGORY_MAP.get(category, ("general", "world", "worldnews", None))
+    gnews_topic = cat_tuple[1]
+    keyword_q   = cat_tuple[3] if len(cat_tuple) > 3 else None
+
     try:
-        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
+        if keyword_q:
+            url = (
+                f"https://gnews.io/api/v4/search"
+                f"?q={requests.utils.quote(keyword_q)}&lang=en&max=10&page={page}"
+                f"&token={GNEWS_KEY}"
+            )
+        else:
+            url = (
+                f"https://gnews.io/api/v4/top-headlines"
+                f"?topic={gnews_topic}&lang=en&max=10&page={page}"
+                f"&token={GNEWS_KEY}"
+            )
+        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
         data = r.json()
         articles = []
         for a in data.get("articles", []):
@@ -166,33 +242,57 @@ def _fetch_gnews(category: str, page: int = 1):
                 "published_at": a.get("publishedAt", ""),
                 "score": 0,
             })
+
+        if not articles and keyword_q:
+            fallback_url = (
+                f"https://gnews.io/api/v4/top-headlines"
+                f"?topic={gnews_topic}&lang=en&max=10&page={page}"
+                f"&token={GNEWS_KEY}"
+            )
+            r = requests.get(fallback_url, headers=DEFAULT_REQUEST_HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
+            data = r.json()
+            for a in data.get("articles", []):
+                if not a.get("url"):
+                    continue
+                articles.append({
+                    "id": a.get("url"),
+                    "title": a.get("title", ""),
+                    "url": a.get("url", ""),
+                    "image_url": a.get("image"),
+                    "source": a.get("source", {}).get("name", "GNews"),
+                    "description": a.get("description", ""),
+                    "published_at": a.get("publishedAt", ""),
+                    "score": 0,
+                })
         return articles
     except Exception as e:
         print(f"GNews error: {e}")
         return []
 
 
-def _fetch_reddit(category: str, sort: str = "hot", limit: int = 20, after: str = None):
+def _fetch_reddit(category: str, sort: str = "hot", limit: int = PAGE_SIZE, after: str = None):
     """Reddit fallback — always free, no key needed."""
-    subreddit = CATEGORY_MAP.get(category, ("general", "world", "worldnews"))[2]
-    sort_map = {"hot": "hot", "top": "top", "trending": "rising"}
+    category = _normalize_category(category)
+    cat_tuple  = CATEGORY_MAP.get(category, ("general", "world", "worldnews", None))
+    subreddit  = cat_tuple[2]
+    sort_map   = {"hot": "hot", "top": "top", "trending": "rising"}
     reddit_sort = sort_map.get(sort, "hot")
-    url = f"https://www.reddit.com/r/{subreddit}/{reddit_sort}.json?limit={limit}"
+    url = f"https://www.reddit.com/r/{subreddit}/{reddit_sort}.json?limit=100"
     if after:
         url += f"&after={after}"
-    headers = {"User-Agent": "UpFeedApp/1.0"}
     try:
-        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
+        r = requests.get(url, headers=REDDIT_HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
         data = r.json()
         raw = data.get("data", {})
         articles = []
         for post in raw.get("children", []):
+            if len(articles) >= limit:
+                break
             s = post.get("data", {})
-            if s.get("is_self"):
-                continue
             article_url = s.get("url")
-            if not article_url:
-                continue
+            # Include discussion/text posts if they lack an external link. Fallback to permalink.
+            if not article_url or s.get("is_self"):
+                article_url = f"https://www.reddit.com{s.get('permalink', '')}"
             image_url = None
             try:
                 if "preview" in s and s["preview"].get("images"):
@@ -225,7 +325,6 @@ def _cache_key(category: str, sort: str) -> str:
 
 
 def _get_cached(category: str, sort: str):
-    """Return cached articles if fresh, else None."""
     if supabase is None:
         return None
     try:
@@ -246,7 +345,6 @@ def _get_cached(category: str, sort: str):
 
 
 def _set_cache(category: str, sort: str, articles: list):
-    """Upsert articles into Supabase cache."""
     if supabase is None:
         return
     try:
@@ -263,7 +361,7 @@ def _set_cache(category: str, sort: str, articles: list):
         print(f"Cache write error: {e}")
 
 
-def _fetch_fresh(category: str, sort: str = "hot") -> list:
+def _fetch_fresh(category: str, sort: str = "hot", page: int = 1) -> list:
     """Fetch from all sources, merge, deduplicate."""
     seen_urls = set()
     merged = []
@@ -275,15 +373,20 @@ def _fetch_fresh(category: str, sort: str = "hot") -> list:
                 seen_urls.add(key)
                 merged.append(a)
 
-    # Primary: NewsAPI
-    add(_fetch_newsapi(category, page_size=20))
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [
+            executor.submit(_fetch_newsapi, category, page, PAGE_SIZE),
+            executor.submit(_fetch_gnews, category, page),
+            executor.submit(_fetch_reddit, category, sort, PAGE_SIZE, None),
+        ]
 
-    # Secondary: GNews (adds variety)
-    add(_fetch_gnews(category))
-
-    # Tertiary: Reddit (always works, fills gaps)
-    reddit_articles, _ = _fetch_reddit(category, sort=sort, limit=20)
-    add(reddit_articles)
+        for future in as_completed(futures):
+            result = future.result()
+            if isinstance(result, tuple):
+                articles = result[0]
+            else:
+                articles = result
+            add(articles)
 
     return merged
 
@@ -295,35 +398,39 @@ def get_news(
     category: str,
     sort: str = Query(default="hot"),
     refresh: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),          # ← pagination
     after: Optional[str] = Query(default=None),  # for Reddit pagination only
 ):
+    category = _normalize_category(category)
+
     if category not in CATEGORY_MAP:
         return {"status": "error", "message": f"Unknown category: {category}"}
 
-    # Try cache first (skip if forced refresh or pagination)
-    if not refresh and not after:
+    # Try cache only on page 1 (first load)
+    if not refresh and not after and page == 1:
         cached = _get_cached(category, sort)
         if cached:
             return {
                 "status": "success",
                 "data": cached,
                 "from_cache": True,
-                "has_more": False,
+                "has_more": True,
+                "next_page": 2,
                 "next_after": None,
             }
 
-    # Fetch fresh
-    articles = _fetch_fresh(category, sort)
+    articles = _fetch_fresh(category, sort, page=page)
 
-    # Save to cache
-    if not after:
+    # Save to cache only on first page and if we actually found articles
+    if page == 1 and not after and len(articles) > 0:
         _set_cache(category, sort, articles)
 
     return {
         "status": "success",
         "data": articles,
         "from_cache": False,
-        "has_more": False,
+        "has_more": len(articles) >= PAGE_SIZE,
+        "next_page": page + 1 if len(articles) >= PAGE_SIZE else None,
         "next_after": None,
     }
 
@@ -334,6 +441,7 @@ def get_news(
 def search_news(
     q: str = Query(..., min_length=1),
     limit: int = Query(default=20, ge=1, le=50),
+    page: int = Query(default=1, ge=1),
 ):
     seen_urls = set()
     results = []
@@ -345,12 +453,12 @@ def search_news(
                 seen_urls.add(key)
                 results.append(a)
 
-    # NewsAPI everything search
     if NEWSAPI_KEY:
         try:
             url = (
                 f"https://newsapi.org/v2/everything"
-                f"?q={requests.utils.quote(q)}&language=en&sortBy=relevancy&pageSize={limit}"
+                f"?q={requests.utils.quote(q)}&language=en&sortBy=relevancy"
+                f"&pageSize={limit}&page={page}"
                 f"&apiKey={NEWSAPI_KEY}"
             )
             r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
@@ -371,7 +479,6 @@ def search_news(
         except Exception as e:
             print(f"NewsAPI search error: {e}")
 
-    # GNews search
     if GNEWS_KEY:
         try:
             url = (
@@ -395,10 +502,9 @@ def search_news(
         except Exception as e:
             print(f"GNews search error: {e}")
 
-    # Reddit search fallback
     try:
         url = f"https://www.reddit.com/search.json?q={requests.utils.quote(q)}&sort=relevance&limit=15&type=link"
-        r = requests.get(url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
+        r = requests.get(url, headers=REDDIT_HEADERS, timeout=10)
         data = r.json()
         for post in data.get("data", {}).get("children", []):
             s = post.get("data", {})
@@ -423,7 +529,12 @@ def search_news(
     except Exception as e:
         print(f"Reddit search error: {e}")
 
-    return {"status": "success", "data": results}
+    return {
+        "status": "success",
+        "data": results,
+        "has_more": len(results) >= limit,
+        "next_page": page + 1 if len(results) >= limit else None,
+    }
 
 
 # ── ARTICLE READER ────────────────────────────────────────────────────────────

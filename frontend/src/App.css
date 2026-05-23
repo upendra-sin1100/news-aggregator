@@ -772,6 +772,78 @@ body {
   border-color: var(--accent);
 }
 
+.icon-btn--translate {
+  color: var(--accent-ai);
+  border-color: var(--border-strong);
+}
+
+.icon-btn--translate:hover:not(:disabled) {
+  background: var(--accent-ai-bg);
+  border-color: var(--accent-ai);
+}
+
+.icon-btn--translated {
+  background: var(--accent-ai);
+  color: white;
+  border-color: var(--accent-ai);
+}
+
+.icon-btn--translated:hover:not(:disabled) {
+  background: var(--accent-ai);
+  opacity: 0.9;
+}
+
+.card__title--hindi {
+  font-family: var(--font-body);
+}
+
+.scroll-sentinel {
+  height: 1px;
+  visibility: hidden;
+}
+
+.load-more-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.end-of-feed {
+  text-align: center;
+  padding: 20px 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.load-more-wrap {
+  text-align: center;
+  padding: 20px 0;
+}
+
+.load-more-btn {
+  padding: 10px 24px;
+  background: var(--paper-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.load-more-btn:hover {
+  background: var(--paper-warm);
+  border-color: var(--ink-muted);
+}
+
 .card--grid .card__actions {
   justify-content: flex-end;
 }
@@ -1395,6 +1467,7 @@ body {
   }
 
   .card__desc--grid {
+    line-clamp: 2;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -1403,6 +1476,11 @@ body {
 
   .card__source {
     margin-bottom: 10px;
+  }
+
+  .card__actions {
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   /* Buttons — ensure 44px touch targets on hero */

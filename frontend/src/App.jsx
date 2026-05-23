@@ -8,15 +8,22 @@ const REFRESH_INTERVAL = 5 * 60 * 60 * 1000 // 5 hours
 const PRIMARY_TABS = [
   { slug: 'technology', label: 'Tech' },
   { slug: 'world', label: 'World' },
+  { slug: 'india', label: '🇮🇳 India' },
   { slug: 'science', label: 'Science' },
 ]
 
 // ── Dropdown "More" categories ────────────────────────────────────────────────
 const MORE_TABS = [
   { slug: 'business', label: '💼 Business' },
+  { slug: 'stock-market', label: '📈 Stock Market' },
   { slug: 'health', label: '🩺 Health' },
   { slug: 'sports', label: '⚽ Sports' },
   { slug: 'entertainment', label: '🎬 Entertainment' },
+  { slug: 'politics', label: '🏛️ Politics' },
+  { slug: 'gaming', label: '🎮 Gaming' },
+  { slug: 'environment', label: '🌿 Environment' },
+  { slug: 'cryptocurrency', label: '₿ Crypto' },
+  { slug: 'automobile', label: '🚗 Automobile' },
 ]
 
 const ALL_TABS = [...PRIMARY_TABS, ...MORE_TABS]
@@ -34,15 +41,101 @@ function useToasts() {
   return { toasts, addToast: add, removeToast: remove }
 }
 
-// ── Speech ────────────────────────────────────────────────────────────────────
-function speak(text, onEnd) {
+// ── Hindi Translation via Google Translate (free endpoint) ────────────────────
+async function translateToHindi(text) {
+  if (!text) return null
+  try {
+    // Split text into chunks to avoid URI Too Long (414) errors
+    const MAX_LENGTH = 1200
+    const chunks = []
+    let current = ''
+    const parts = text.split(/(?<=[.!?\n])\s+/)
+
+    for (const part of parts) {
+      if ((current + part).length > MAX_LENGTH && current.length > 0) {
+        chunks.push(current)
+        current = part + ' '
+      } else {
+        current += part + ' '
+      }
+    }
+    if (current.trim()) chunks.push(current)
+
+    let fullTranslation = ''
+    for (const chunk of chunks) {
+      if (!chunk.trim()) continue
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=hi&dt=t&q=${encodeURIComponent(chunk.trim())}`
+      const res = await fetch(url)
+      const data = await res.json()
+      if (data && data[0]) {
+        fullTranslation += data[0].map(c => c[0]).join('') + ' '
+      }
+    }
+    return fullTranslation.trim() || null
+  } catch (e) {
+    console.error('Translation error:', e)
+    return null
+  }
+}
+
+// ── Speech — Female voice, Hindi support ──────────────────────────────────────
+function getVoice(lang = 'en') {
+  const voices = window.speechSynthesis.getVoices()
+  const langCode = lang === 'hi' ? 'hi' : 'en'
+
+  // Prefer female voices
+  const femaleKeywords = ['female', 'woman', 'girl', 'zira', 'samantha', 'victoria',
+    'karen', 'moira', 'susan', 'fiona', 'tessa', 'veena', 'lekha', 'swara', 'anjali', 'aditi', 'kavya', 'neerja', 'lipi']
+
+  // Filter by language first
+  const langVoices = voices.filter(v => v.lang.startsWith(langCode))
+
+  // Try to find a female voice
+  const femaleVoice = langVoices.find(v =>
+    femaleKeywords.some(kw => v.name.toLowerCase().includes(kw))
+  )
+  if (femaleVoice) return femaleVoice
+
+  // Fall back to any voice of that language
+  if (langVoices.length > 0) return langVoices[0]
+
+  // Last resort: any female voice
+  const anyFemale = voices.find(v =>
+    femaleKeywords.some(kw => v.name.toLowerCase().includes(kw))
+  )
+  return anyFemale || null
+}
+
+function speak(text, lang = 'en', onEnd) {
   if (!('speechSynthesis' in window)) return
   window.speechSynthesis.cancel()
-  const u = new SpeechSynthesisUtterance(text)
-  u.rate = 1.0; u.pitch = 1.0; u.onend = onEnd
-  window.speechSynthesis.speak(u)
+
+  // Voices may not be loaded yet — wait briefly if needed
+  const doSpeak = () => {
+    const u = new SpeechSynthesisUtterance(text)
+    u.rate = 1.0
+    u.pitch = 1.05
+    u.lang = lang === 'hi' ? 'hi-IN' : 'en-US'
+    const voice = getVoice(lang)
+    if (voice) u.voice = voice
+    u.onend = onEnd
+    window.speechSynthesis.speak(u)
+  }
+
+  if (window.speechSynthesis.getVoices().length === 0) {
+    // Voices not yet loaded
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.onvoiceschanged = null
+      doSpeak()
+    }
+  } else {
+    doSpeak()
+  }
 }
-function stopSpeech() { if ('speechSynthesis' in window) window.speechSynthesis.cancel() }
+
+function stopSpeech() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+}
 
 // ── Share ─────────────────────────────────────────────────────────────────────
 async function shareArticle(title, url, addToast) {
@@ -127,26 +220,39 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('technology')
   const [activeColl, setActiveColl] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const [nextPage, setNextPage] = useState(2)
   const [busyIds, setBusyIds] = useState([])
   const [readerData, setReaderData] = useState(null)
+  const [readerHindi, setReaderHindi] = useState(null)
+  const [readerTranslating, setReaderTranslating] = useState(false)
   const [isReading, setIsReading] = useState(false)
   const [readerUrl, setReaderUrl] = useState(null)
   const [isSpeaking, setIsSpeaking] = useState(false)
+  const [speakLang, setSpeakLang] = useState('en')      // 'en' | 'hi'
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('upfeed-theme') === 'dark')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchActive, setSearchActive] = useState(false)
   const [searchResults, setSearchResults] = useState([])
   const [searchLoading, setSearchLoading] = useState(false)
+  const [searchPage, setSearchPage] = useState(1)
+  const [searchHasMore, setSearchHasMore] = useState(false)
   const [collPickerFor, setCollPickerFor] = useState(null)
   const [sortMode, setSortMode] = useState('hot')
   const [moreOpen, setMoreOpen] = useState(false)
   const [moreMenuStyle, setMoreMenuStyle] = useState(null)
   const [fromCache, setFromCache] = useState(false)
 
+  // Translation states per-article: { [articleId]: { loading, text } }
+  const [translations, setTranslations] = useState({})
+
   const { toasts, addToast, removeToast } = useToasts()
   const moreRef = useRef(null)
   const moreButtonRef = useRef(null)
   const refreshTimer = useRef(null)
+  const sentinelRef = useRef(null)   // infinite scroll sentinel
+  const newsRequestSeq = useRef(0)
 
   const isSavedView = activeTab === 'saved'
   const activeTabLabel = ALL_TABS.find(t => t.slug === activeTab)?.label || activeTab
@@ -157,7 +263,7 @@ export default function App() {
     localStorage.setItem('upfeed-theme', darkMode ? 'dark' : 'light')
   }, [darkMode])
 
-  // ── Close dropdown on outside click ──
+  // ── Close more dropdown on outside click ──
   useEffect(() => {
     const handler = e => { if (moreRef.current && !moreRef.current.contains(e.target)) setMoreOpen(false) }
     document.addEventListener('mousedown', handler)
@@ -174,32 +280,127 @@ export default function App() {
     })
   }, [moreOpen, activeTab])
 
-  // ── Fetch news ──
+  // ── Fetch news (page 1) ──
   const fetchNews = useCallback(async (tab, sort, forceRefresh = false) => {
+    const requestId = ++newsRequestSeq.current
     if (tab === 'saved') {
       setLoading(true)
       try {
         const url = `${API}/api/bookmarks${activeColl !== null ? `?collection_id=${activeColl}` : ''}`
         const res = await fetch(url)
         const data = await res.json()
+        if (newsRequestSeq.current !== requestId) return
         if (data.status === 'success') setSavedArticles(data.data || [])
-      } catch (err) { console.error(err) }
-      setLoading(false)
+        else addToast(data.message || 'Could not load saved stories.', 'error')
+      } catch (err) {
+        console.error(err)
+        if (newsRequestSeq.current === requestId) addToast('Could not load saved stories.', 'error')
+      }
+      if (newsRequestSeq.current === requestId) setLoading(false)
       return
     }
     setLoading(true)
+    setNews([])
+    setNextPage(2)
+    setHasMore(true)
+    setFromCache(false)
     try {
-      const url = `${API}/api/news/${tab}?sort=${sort}${forceRefresh ? '&refresh=true' : ''}`
+      const url = `${API}/api/news/${tab}?sort=${sort}&page=1${forceRefresh ? '&refresh=true' : ''}`
       const res = await fetch(url)
       const data = await res.json()
+      if (newsRequestSeq.current !== requestId) return
       if (data.status === 'success') {
         setNews(data.data || [])
         setFromCache(data.from_cache || false)
+        setHasMore(data.has_more ?? false)
+        setNextPage(data.next_page ?? null)
+      } else {
+        addToast(data.message || `Could not load ${tab} stories.`, 'error')
       }
-    } catch (err) { console.error(err) }
-    setLoading(false)
+    } catch (err) {
+      console.error(err)
+      if (newsRequestSeq.current === requestId) addToast(`Could not load ${tab} stories.`, 'error')
+    }
+    if (newsRequestSeq.current === requestId) setLoading(false)
   }, [activeColl])
 
+  // ── Search ──
+  const runSearch = useCallback(async (q, page = 1) => {
+    if (!q.trim()) return
+    setSearchActive(true)
+    if (page === 1) {
+      setSearchLoading(true)
+      setSearchResults([])
+    } else {
+      setLoadingMore(true)
+    }
+    try {
+      const res = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}&limit=20&page=${page}`)
+      const data = await res.json()
+      if (data.status === 'success') {
+        if (page === 1) {
+          setSearchResults(data.data || [])
+        } else {
+          setSearchResults(prev => {
+            const existing = new Set(prev.map(a => a.url || a.id))
+            return [...prev, ...(data.data || []).filter(a => !existing.has(a.url || a.id))]
+          })
+        }
+        setSearchHasMore(data.has_more ?? false)
+        setSearchPage(page + 1)
+      }
+    } catch (e) { console.error(e) }
+    setSearchLoading(false)
+    setLoadingMore(false)
+  }, [])
+
+  // ── Load more (infinite scroll) ──
+  const loadMore = useCallback(async () => {
+    if (isSavedView) return
+
+    if (searchActive) {
+      if (loadingMore || searchLoading || !searchHasMore) return
+      setLoadingMore(true)
+      try {
+        await runSearch(searchQuery, searchPage)
+      } finally {
+        setLoadingMore(false)
+      }
+      return
+    }
+
+    if (loadingMore || !hasMore || !nextPage) return
+    setLoadingMore(true)
+    try {
+      const url = `${API}/api/news/${activeTab}?sort=${sortMode}&page=${nextPage}`
+      const res = await fetch(url)
+      const data = await res.json()
+      if (data.status === 'success') {
+        setNews(prev => {
+          const existingUrls = new Set(prev.map(a => a.url || a.id))
+          const fresh = (data.data || []).filter(a => !existingUrls.has(a.url || a.id))
+          return [...prev, ...fresh]
+        })
+        setHasMore(data.has_more ?? false)
+        setNextPage(data.next_page ?? null)
+      }
+    } catch (err) { console.error(err) }
+    setLoadingMore(false)
+  }, [loadingMore, hasMore, nextPage, activeTab, sortMode, isSavedView, searchActive, searchLoading, searchHasMore, runSearch, searchQuery, searchPage])
+
+  // ── IntersectionObserver for infinite scroll ──
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      entries => { if (entries[0].isIntersecting) loadMore() },
+      { rootMargin: '200px' }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [loadMore])
+
+  // ── Initial fetch on tab/sort change ──
   useEffect(() => {
     const timer = window.setTimeout(() => {
       fetchNews(activeTab, sortMode)
@@ -225,17 +426,20 @@ export default function App() {
       .catch(() => { })
   }, [])
 
-  // ── Search ──
-  const runSearch = useCallback(async q => {
-    if (!q.trim()) return
-    setSearchActive(true)
-    setSearchLoading(true)
-    try {
-      const res = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}&limit=20`)
-      const data = await res.json()
-      if (data.status === 'success') setSearchResults(data.data || [])
-    } catch (e) { console.error(e) }
-    setSearchLoading(false)
+  // ── Hindi Translation handler ──
+  const handleTranslate = useCallback(async (articleId, text) => {
+    setTranslations(prev => ({ ...prev, [articleId]: { loading: true, text: null } }))
+    const translated = await translateToHindi(text)
+    if (translated) {
+      setTranslations(prev => ({ ...prev, [articleId]: { loading: false, text: translated } }))
+    } else {
+      setTranslations(prev => { const n = { ...prev }; delete n[articleId]; return n })
+      addToast('Translation failed. Try again.', 'error')
+    }
+  }, [addToast])
+
+  const clearTranslation = useCallback(articleId => {
+    setTranslations(prev => { const n = { ...prev }; delete n[articleId]; return n })
   }, [])
 
   // ── Bookmark helpers ──
@@ -254,8 +458,7 @@ export default function App() {
       if (data.status === 'success') {
         addToast('Article saved!', 'success')
         if (activeTab === 'saved') fetchNews('saved', sortMode)
-      }
-      else addToast(data.message || 'Could not save.', 'error')
+      } else addToast(data.message || 'Could not save.', 'error')
     } catch { addToast('Could not save bookmark.', 'error') }
     setBusy(key, false)
   }
@@ -278,7 +481,7 @@ export default function App() {
 
   // ── Reader ──
   const handleRead = async url => {
-    setIsReading(true); setReaderData(null); setReaderUrl(url); setIsSpeaking(false); stopSpeech()
+    setIsReading(true); setReaderData(null); setReaderHindi(null); setReaderTranslating(false); setReaderUrl(url); setIsSpeaking(false); setSpeakLang('en'); stopSpeech()
     try {
       const res = await fetch(`${API}/api/read`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) })
       const data = await res.json()
@@ -287,11 +490,53 @@ export default function App() {
     } catch { setIsReading(false) }
   }
 
-  const closeReader = () => { setIsReading(false); stopSpeech(); setIsSpeaking(false) }
+  const closeReader = () => { setIsReading(false); stopSpeech(); setIsSpeaking(false); setReaderHindi(null); }
 
-  const toggleSpeech = () => {
-    if (isSpeaking) { stopSpeech(); setIsSpeaking(false) }
-    else if (readerData) { speak(`${readerData.title}. ${readerData.ai_summary || ''} ${readerData.full_text || ''}`, () => setIsSpeaking(false)); setIsSpeaking(true) }
+  const handleTranslateReader = async () => {
+    if (readerHindi) {
+      setReaderHindi(null) // Toggle back to English
+      return
+    }
+    setReaderTranslating(true)
+    const title = await translateToHindi(readerData.title)
+    const summary = readerData.ai_summary ? await translateToHindi(readerData.ai_summary) : null
+    const full = await translateToHindi(readerData.full_text)
+
+    if (title || full) {
+      setReaderHindi({ title: title || readerData.title, ai_summary: summary, full_text: full || readerData.full_text })
+    } else {
+      addToast('Translation failed.', 'error')
+    }
+    setReaderTranslating(false)
+  }
+
+  // TTS with language support
+  const toggleSpeech = async (lang = 'en') => {
+    if (isSpeaking && speakLang === lang) {
+      stopSpeech(); setIsSpeaking(false); return
+    }
+    if (!readerData) return
+    stopSpeech()
+
+    // Speak the AI summary if available. Fallback to first part of text so it doesn't try to read forever.
+    let textToSpeak = readerData.ai_summary
+      ? `${readerData.title}. Summary: ${readerData.ai_summary}`
+      : `${readerData.title}. ${readerData.full_text?.slice(0, 1000) || ''}`
+
+    if (lang === 'hi') {
+      if (readerHindi) {
+        textToSpeak = readerHindi.ai_summary ? `${readerHindi.title}. ${readerHindi.ai_summary}` : `${readerHindi.title}. ${readerHindi.full_text?.slice(0, 1000) || ''}`
+      } else {
+        addToast('Translating to Hindi for speech…', 'info', 2000)
+        const hindiText = await translateToHindi(textToSpeak)
+        if (!hindiText) { addToast('Translation failed.', 'error'); return }
+        textToSpeak = hindiText
+      }
+    }
+
+    setSpeakLang(lang)
+    setIsSpeaking(true)
+    speak(textToSpeak, lang, () => setIsSpeaking(false))
   }
 
   const displayArticles = searchActive ? searchResults : (isSavedView ? savedArticles : news)
@@ -302,7 +547,10 @@ export default function App() {
     setSearchActive(false)
     setSearchQuery('')
     setMoreOpen(false)
+    setTranslations({})
   }
+
+  const showLoadMore = searchActive ? searchHasMore : (hasMore && !isSavedView)
 
   return (
     <div className="app-container">
@@ -345,7 +593,6 @@ export default function App() {
         </div>
 
         <nav className="genre-tabs">
-          {/* Primary tabs */}
           {PRIMARY_TABS.map(t => (
             <button key={t.slug} className={`tab-btn ${activeTab === t.slug && !searchActive ? 'active' : ''}`}
               onClick={() => switchTab(t.slug)}>{t.label}</button>
@@ -378,7 +625,7 @@ export default function App() {
           <button className={`tab-btn tab-saved ${isSavedView && !searchActive ? 'active' : ''}`}
             onClick={() => switchTab('saved')}>⊙ Saved</button>
 
-          {/* Sort pills — hidden in saved/search view */}
+          {/* Sort pills */}
           {!isSavedView && !searchActive && (
             <>
               <div className="tab-divider" />
@@ -431,18 +678,38 @@ export default function App() {
         <main className="feed">
           {featured && (
             <ArticleCard article={featured} hero isSavedView={isSavedView} busyIds={busyIds}
+              translation={translations[featured.id || featured.url]}
               onRead={handleRead} onSave={a => setCollPickerFor(a)} onRemove={removeBookmark}
-              onShare={a => shareArticle(a.title, a.url, addToast)} />
+              onShare={a => shareArticle(a.title, a.url, addToast)}
+              onTranslate={handleTranslate} onClearTranslation={clearTranslation} />
           )}
           {rest.length > 0 && (
             <div className="news-grid">
               {rest.map(article => (
                 <ArticleCard key={article.id || article.url} article={article}
                   isSavedView={isSavedView} busyIds={busyIds}
+                  translation={translations[article.id || article.url]}
                   onRead={handleRead} onSave={a => setCollPickerFor(a)} onRemove={removeBookmark}
-                  onShare={a => shareArticle(a.title, a.url, addToast)} />
+                  onShare={a => shareArticle(a.title, a.url, addToast)}
+                  onTranslate={handleTranslate} onClearTranslation={clearTranslation} />
               ))}
             </div>
+          )}
+
+          {/* Infinite scroll sentinel */}
+          <div ref={sentinelRef} className="scroll-sentinel" />
+
+          {/* Load more spinner */}
+          {loadingMore && (
+            <div className="load-more-spinner">
+              <div className="loading-spinner" />
+              <span>Loading more stories…</span>
+            </div>
+          )}
+
+          {/* End of feed */}
+          {!showLoadMore && !loadingMore && displayArticles.length > 0 && (
+            <div className="end-of-feed">You're all caught up ✦</div>
           )}
         </main>
       )}
@@ -467,25 +734,48 @@ export default function App() {
               <div className="modal-body">
                 <div className="modal-header">
                   <span className="modal-label">AI Reader</span>
-                  <h2 className="modal-title">{readerData.title}</h2>
+                  <h2 className={`modal-title ${readerHindi ? 'card__title--hindi' : ''}`}>{readerHindi ? readerHindi.title : readerData.title}</h2>
                   <div className="modal-actions">
-                    <button className={`tts-btn ${isSpeaking ? 'tts-btn--active' : ''}`} onClick={toggleSpeech}>
-                      {isSpeaking ? '⏹ Stop' : '▶ Listen'}
+                    {/* English TTS */}
+                    <button
+                      className={`tts-btn ${isSpeaking && speakLang === 'en' ? 'tts-btn--active' : ''}`}
+                      onClick={() => toggleSpeech('en')}
+                      title="Listen to summary in English"
+                    >
+                      {isSpeaking && speakLang === 'en' ? '⏹ Stop' : '▶ Listen'}
                     </button>
+                    {/* Hindi TTS */}
+                    <button
+                      className={`tts-btn tts-btn--hindi ${isSpeaking && speakLang === 'hi' ? 'tts-btn--active' : ''}`}
+                      onClick={() => toggleSpeech('hi')}
+                      title="Listen to summary in Hindi"
+                    >
+                      {isSpeaking && speakLang === 'hi' ? '⏹ रुकें' : '▶ हिंदी'}
+                    </button>
+                    {/* Translate Text Button */}
+                    <button
+                      className={`tts-btn ${readerHindi ? 'tts-btn--active' : ''}`}
+                      onClick={handleTranslateReader}
+                      disabled={readerTranslating}
+                      title="Translate article text to Hindi"
+                    >
+                      {readerTranslating ? 'अ Translating...' : (readerHindi ? 'A Show English' : 'अ Translate Text')}
+                    </button>
+
                     <button className="share-btn-modal" onClick={() => shareArticle(readerData.title, readerUrl, addToast)}>↗ Share</button>
                     <button className="save-btn-modal" onClick={() => setCollPickerFor({ title: readerData.title, url: readerUrl, image_url: null, ai_summary: readerData.ai_summary })}>⊙ Save</button>
                   </div>
                 </div>
-                {readerData.ai_summary && (
+                {(readerHindi ? readerHindi.ai_summary : readerData.ai_summary) && (
                   <div className="modal-summary">
-                    <div className="summary-header"><span className="summary-icon">✦</span><span className="summary-title">AI Summary</span></div>
-                    <p>{readerData.ai_summary}</p>
+                    <div className="summary-header"><span className="summary-icon">✦</span><span className="summary-title">{readerHindi ? 'सारांश (Summary)' : 'AI Summary'}</span></div>
+                    <p className={readerHindi ? 'card__title--hindi' : ''}>{readerHindi ? readerHindi.ai_summary : readerData.ai_summary}</p>
                   </div>
                 )}
                 <div className="modal-divider" />
                 <div className="modal-full-text">
-                  <h4 className="full-text-label">Full Article</h4>
-                  <p>{readerData.full_text}</p>
+                  <h4 className="full-text-label">{readerHindi ? 'पूरा लेख' : 'Full Article'}</h4>
+                  <p className={readerHindi ? 'card__title--hindi' : ''}>{readerHindi ? readerHindi.full_text : readerData.full_text}</p>
                 </div>
               </div>
             )}
@@ -497,10 +787,27 @@ export default function App() {
 }
 
 // ── Article Card ──────────────────────────────────────────────────────────────
-function ArticleCard({ article, hero, isSavedView, busyIds, onRead, onSave, onRemove, onShare }) {
+function ArticleCard({ article, hero, isSavedView, busyIds, translation, onRead, onSave, onRemove, onShare, onTranslate, onClearTranslation }) {
   const key = article.id || article.url
   const isBusy = busyIds.includes(key)
   const fallback = 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?q=80&w=1200&auto=format&fit=crop'
+
+  const isTranslated = translation && translation.text
+  const isTranslating = translation && translation.loading
+
+  const handleTranslateClick = e => {
+    e.stopPropagation()
+    if (isTranslated) {
+      onClearTranslation(key)
+    } else {
+      onTranslate(key, `${article.title}. ${article.description || ''}`)
+    }
+  }
+
+  const displayTitle = isTranslated ? translation.text.split('.')[0] : article.title
+  const displayDesc = isTranslated
+    ? translation.text.split('.').slice(1).join('.').trim()
+    : article.description
 
   if (hero) {
     return (
@@ -511,11 +818,19 @@ function ArticleCard({ article, hero, isSavedView, busyIds, onRead, onSave, onRe
         </div>
         <div className="card__body card__body--hero">
           <span className="card__label">Top Story</span>
-          <h2 className="card__title card__title--hero">{article.title}</h2>
-          {article.description && <p className="card__desc">{article.description}</p>}
+          <h2 className={`card__title card__title--hero ${isTranslated ? 'card__title--hindi' : ''}`}>{displayTitle}</h2>
+          {displayDesc && <p className="card__desc">{displayDesc}</p>}
           {article.source && <span className="card__source">{article.source}</span>}
           <div className="card__actions">
             <button className="read-btn">Read & Summarize →</button>
+            <button
+              className={`icon-btn icon-btn--translate ${isTranslated ? 'icon-btn--translated' : ''}`}
+              onClick={handleTranslateClick}
+              disabled={isTranslating}
+              title={isTranslated ? 'Show original' : 'Translate to Hindi'}
+            >
+              {isTranslating ? '…' : isTranslated ? 'A' : 'अ'}
+            </button>
             {isSavedView ? (
               <button className="icon-btn icon-btn--remove" onClick={e => { e.stopPropagation(); onRemove(article.id) }} disabled={isBusy}>{isBusy ? '…' : '✕ Remove'}</button>
             ) : (
@@ -536,10 +851,18 @@ function ArticleCard({ article, hero, isSavedView, busyIds, onRead, onSave, onRe
         <img src={article.image_url || fallback} alt="" onError={e => { e.target.onerror = null; e.target.src = fallback }} />
       </div>
       <div className="card__body">
-        <h3 className="card__title">{article.title}</h3>
-        {article.description && <p className="card__desc card__desc--grid">{article.description}</p>}
+        <h3 className={`card__title ${isTranslated ? 'card__title--hindi' : ''}`}>{displayTitle}</h3>
+        {displayDesc && <p className="card__desc card__desc--grid">{displayDesc}</p>}
         {article.source && <span className="card__source">{article.source}</span>}
         <div className="card__actions">
+          <button
+            className={`icon-btn icon-btn--translate ${isTranslated ? 'icon-btn--translated' : ''}`}
+            onClick={handleTranslateClick}
+            disabled={isTranslating}
+            title={isTranslated ? 'Show original' : 'Translate to Hindi'}
+          >
+            {isTranslating ? '…' : isTranslated ? 'A' : 'अ'}
+          </button>
           {isSavedView ? (
             <button className="icon-btn icon-btn--remove" onClick={e => { e.stopPropagation(); onRemove(article.id) }} disabled={isBusy}>{isBusy ? '…' : '✕'}</button>
           ) : (
@@ -552,5 +875,4 @@ function ArticleCard({ article, hero, isSavedView, busyIds, onRead, onSave, onRe
       </div>
     </article>
   )
-} 
- 
+}
