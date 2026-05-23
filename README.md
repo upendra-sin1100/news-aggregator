@@ -1,6 +1,10 @@
 # UpFeed – AI-Powered News Aggregator
 
+[![Live Demo](https://img.shields.io/badge/Live-Demo-brightgreen.svg)](https://up-feed.vercel.app/)
+
 A full-stack news aggregation and reading app that pulls trending stories from Reddit, extracts & summarizes articles, and lets users save bookmarks to collections.
+
+**Live deployment:** [https://up-feed.vercel.app/](https://up-feed.vercel.app/)
 
 ## Features
 
@@ -217,10 +221,6 @@ docker-compose up
 1. Deploy backend to Heroku, Railway, or similar
 2. Deploy frontend to Vercel, Netlify, or GitHub Pages
 3. Update `.env` variables in production
-
-## License
-
-MIT
 
 ## Contributing
 
