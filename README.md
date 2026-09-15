@@ -15,7 +15,7 @@ A full-stack news aggregation and reading app that pulls trending stories from R
 - 🎙️ **Text-to-Speech** – Listen to summaries and articles
 - 📱 **Responsive UI** – Works on desktop and mobile (Capacitor support)
 - 🌙 **Dark Mode** – Built-in theme toggle
-- 💾 **Fallback Storage** – Local JSON storage if Supabase unavailable
+- 🔐 **Private saved stories** – Supabase sign-in with account-owned bookmarks and collections
 
 ## Architecture
 
@@ -47,7 +47,10 @@ A full-stack news aggregation and reading app that pulls trending stories from R
 
 - **Node.js 18+** (frontend)
 - **Python 3.10+** (backend)
-- **Supabase account** (optional; app falls back to local JSON storage)
+- **Supabase account** (required for sign-in and saved stories; news browsing works without it)
+
+For the current database migrations and authentication setup, follow
+[AUTH_SETUP.md](AUTH_SETUP.md). Private saved stories never fall back to shared JSON storage.
 
 ## Setup
 
@@ -82,7 +85,7 @@ A full-stack news aggregation and reading app that pulls trending stories from R
 
 5. Run the server:
    ```bash
-   uvicorn app.main:app --port 8001 --reload
+   uvicorn app.main:app --port 8000 --reload
    ```
 
 ### Frontend
@@ -95,7 +98,7 @@ A full-stack news aggregation and reading app that pulls trending stories from R
 
 2. Create `.env` file in `frontend/` with:
    ```env
-   VITE_API_URL=http://127.0.0.1:8001
+   VITE_API_URL=http://127.0.0.1:8000
    VITE_SUPABASE_URL=https://your-project.supabase.co
    VITE_SUPABASE_PUBLISHABLE_KEY=your_publishable_key
    ```
@@ -124,7 +127,7 @@ A full-stack news aggregation and reading app that pulls trending stories from R
 
 | Variable | Description | Example |
 |----------|-------------|----------|
-| `VITE_API_URL` | Backend API endpoint | `http://127.0.0.1:8001` |
+| `VITE_API_URL` | Backend API endpoint | `http://127.0.0.1:8000` |
 | `VITE_SUPABASE_URL` | Supabase project URL | `https://proj.supabase.co` |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon key | `sb_publishable_...` |
 
@@ -152,7 +155,7 @@ A full-stack news aggregation and reading app that pulls trending stories from R
 ### Run backend in watch mode:
 ```bash
 cd backend
-uvicorn app.main:app --reload --port 8001
+uvicorn app.main:app --reload --port 8000
 ```
 
 ### Run frontend in dev mode:
@@ -179,13 +182,13 @@ npm run lint
 Try the API with curl or Postman:
 ```bash
 # Get tech news
-curl http://localhost:8001/api/news/technology?limit=5
+curl http://localhost:8000/api/news/technology?limit=5
 
 # Search for "AI"
-curl http://localhost:8001/api/search?q=AI&limit=5
+curl http://localhost:8000/api/search?q=AI&limit=5
 
 # Save an article
-curl -X POST http://localhost:8001/api/bookmarks \
+curl -X POST http://localhost:8000/api/bookmarks \
   -H 'Content-Type: application/json' \
   -d '{
     "title": "AI News",

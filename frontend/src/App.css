@@ -1384,6 +1384,19 @@ body {
     gap: 3px;
   }
 
+  /* Float the more button so it's accessible while scrolling */
+  .more-btn {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 1200;
+    background: var(--paper-card);
+    border: 1px solid var(--border-strong);
+    padding: 6px 10px;
+    border-radius: 10px;
+    box-shadow: var(--shadow-hero);
+  }
+
   .more-btn__label {
     display: none;
   }
@@ -1437,6 +1450,10 @@ body {
     border-radius: var(--radius-md);
   }
 
+  .card__img-wrap--hero {
+    min-height: 220px;
+  }
+
   .card__body--hero {
     border-left: none;
     border-top: 1px solid var(--border);
@@ -1444,7 +1461,14 @@ body {
   }
 
   .card__title--hero {
-    font-size: 21px;
+    font-size: 20px;
+    line-height: 1.18;
+  }
+
+  /* Ensure Read button stays visible in dark mode on hero */
+  .read-btn {
+    background: var(--accent);
+    color: #fff;
   }
 
   /* Grid cards */

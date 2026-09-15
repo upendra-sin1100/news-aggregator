@@ -1,33 +1,21 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
+from .feed import edition, fetch_rss
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from newspaper import Article
+from .reader import read_article
 import os
-from typing import Any, Optional
+from typing import Optional
 import requests
-import nltk
-import json
-import time
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 
-LOCAL_BOOKMARKS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bookmarks.json')
-LOCAL_COLLECTIONS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'collections.json')
 
 # ── ENV ──────────────────────────────────────────────────────────────────────
-NEWSAPI_KEY  = os.getenv("NEWSAPI_KEY", "")
+NEWSAPI_KEY  = os.getenv("NEWSAPI_KEY") or os.getenv("NEWS_API_KEY", "")
 GNEWS_KEY    = os.getenv("GNEWS_KEY", "")
-SUPABASE_URL = os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL", "")
-SUPABASE_KEY = (
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    or os.getenv("SUPABASE_ANON_KEY")
-    or os.getenv("VITE_SUPABASE_PUBLISHABLE_KEY", "")
-)
-
-CACHE_TTL_SECONDS = 5 * 60 * 60  # 5 hours
 PAGE_SIZE = 20
 REQUEST_TIMEOUT_SECONDS = 5
 
@@ -73,44 +61,6 @@ CATEGORY_ALIASES = {
 
 def _normalize_category(category: str) -> str:
     return CATEGORY_ALIASES.get(category, category)
-
-# ── LOCAL HELPERS ─────────────────────────────────────────────────────────────
-def _load_json(path):
-    try:
-        if not os.path.exists(path):
-            return []
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-def _save_json(path, items):
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(items, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception:
-        return False
-
-# ── SUPABASE ──────────────────────────────────────────────────────────────────
-try:
-    from supabase import create_client
-except ImportError as e:
-    print(f"⚠️  Supabase import failed: {e}")
-    create_client = None
-
-supabase: Any = (
-    create_client(SUPABASE_URL, SUPABASE_KEY)
-    if create_client and SUPABASE_URL and SUPABASE_KEY
-    else None
-)
-
-# ── NLTK ──────────────────────────────────────────────────────────────────────
-for pkg in ("tokenizers/punkt", "corpora/stopwords"):
-    try:
-        nltk.data.find(pkg)
-    except LookupError:
-        nltk.download(pkg.split('/', 1)[1])
 
 # ── FASTAPI ───────────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -275,7 +225,7 @@ def _fetch_reddit(category: str, sort: str = "hot", limit: int = PAGE_SIZE, afte
     category = _normalize_category(category)
     cat_tuple  = CATEGORY_MAP.get(category, ("general", "world", "worldnews", None))
     subreddit  = cat_tuple[2]
-    sort_map   = {"hot": "hot", "top": "top", "trending": "rising"}
+    sort_map   = {"hot": "hot", "top": "top", "trending": "rising", "latest": "new"}
     reddit_sort = sort_map.get(sort, "hot")
     url = f"https://www.reddit.com/r/{subreddit}/{reddit_sort}.json?limit=100"
     if after:
@@ -318,49 +268,6 @@ def _fetch_reddit(category: str, sort: str = "hot", limit: int = PAGE_SIZE, afte
         return [], None
 
 
-# ── SUPABASE CACHE HELPERS ────────────────────────────────────────────────────
-
-def _cache_key(category: str, sort: str) -> str:
-    return f"{category}_{sort}"
-
-
-def _get_cached(category: str, sort: str):
-    if supabase is None:
-        return None
-    try:
-        key = _cache_key(category, sort)
-        res = supabase.table("news_cache").select("*").eq("cache_key", key).execute()
-        rows = res.data or []
-        if not rows:
-            return None
-        row = rows[0]
-        cached_at = datetime.fromisoformat(row["cached_at"].replace("Z", "+00:00"))
-        age = (datetime.now(tz=timezone.utc) - cached_at).total_seconds()
-        if age > CACHE_TTL_SECONDS:
-            return None
-        return json.loads(row["articles_json"])
-    except Exception as e:
-        print(f"Cache read error: {e}")
-        return None
-
-
-def _set_cache(category: str, sort: str, articles: list):
-    if supabase is None:
-        return
-    try:
-        key = _cache_key(category, sort)
-        payload = {
-            "cache_key": key,
-            "category": category,
-            "sort": sort,
-            "articles_json": json.dumps(articles),
-            "cached_at": datetime.now(tz=timezone.utc).isoformat(),
-        }
-        supabase.table("news_cache").upsert(payload, on_conflict="cache_key").execute()
-    except Exception as e:
-        print(f"Cache write error: {e}")
-
-
 def _fetch_fresh(category: str, sort: str = "hot", page: int = 1) -> list:
     """Fetch from all sources, merge, deduplicate."""
     seen_urls = set()
@@ -373,14 +280,15 @@ def _fetch_fresh(category: str, sort: str = "hot", page: int = 1) -> list:
                 seen_urls.add(key)
                 merged.append(a)
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [
-            executor.submit(_fetch_newsapi, category, page, PAGE_SIZE),
+            executor.submit(_fetch_newsapi, category, page, 100),
             executor.submit(_fetch_gnews, category, page),
-            executor.submit(_fetch_reddit, category, sort, PAGE_SIZE, None),
+            executor.submit(_fetch_reddit, category, sort, 100, None),
+            executor.submit(fetch_rss, category.replace("-", " ")),
         ]
 
-        for future in as_completed(futures):
+        for future in futures:
             result = future.result()
             if isinstance(result, tuple):
                 articles = result[0]
@@ -396,53 +304,34 @@ def _fetch_fresh(category: str, sort: str = "hot", page: int = 1) -> list:
 @app.get("/api/news/{category}")
 def get_news(
     category: str,
-    sort: str = Query(default="hot"),
+    sort: str = Query(default="latest", pattern="^(latest|hot|trending|top)$"),
     refresh: bool = Query(default=False),
-    page: int = Query(default=1, ge=1),          # ← pagination
-    after: Optional[str] = Query(default=None),  # for Reddit pagination only
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=50),
+    after: Optional[str] = Query(default=None, max_length=64),
 ):
     category = _normalize_category(category)
-
     if category not in CATEGORY_MAP:
-        return {"status": "error", "message": f"Unknown category: {category}"}
+        raise HTTPException(404, f"Unknown category: {category}")
+    return edition(f"news:{category}:{sort}", lambda: _fetch_fresh(category, sort),
+        page, limit, after, refresh, latest=sort == "latest")
 
-    # Try cache only on page 1 (first load)
-    if not refresh and not after and page == 1:
-        cached = _get_cached(category, sort)
-        if cached:
-            return {
-                "status": "success",
-                "data": cached,
-                "from_cache": True,
-                "has_more": True,
-                "next_page": 2,
-                "next_after": None,
-            }
-
-    articles = _fetch_fresh(category, sort, page=page)
-
-    # Save to cache only on first page and if we actually found articles
-    if page == 1 and not after and len(articles) > 0:
-        _set_cache(category, sort, articles)
-
-    return {
-        "status": "success",
-        "data": articles,
-        "from_cache": False,
-        "has_more": len(articles) >= PAGE_SIZE,
-        "next_page": page + 1 if len(articles) >= PAGE_SIZE else None,
-        "next_after": None,
-    }
-
-
-# ── SEARCH ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/search")
 def search_news(
-    q: str = Query(..., min_length=1),
+    q: str = Query(..., min_length=1, max_length=200),
     limit: int = Query(default=20, ge=1, le=50),
     page: int = Query(default=1, ge=1),
+    after: Optional[str] = Query(default=None, max_length=64),
 ):
+    q = q.strip()
+    if not q:
+        raise HTTPException(422, "Enter a search term.")
+    return edition(f"search:{q.casefold()}", lambda: _search_sources(q),
+        page, limit, after, latest=True, allow_empty=True)
+
+
+def _search_sources(q: str, limit: int = 100, page: int = 1):
     seen_urls = set()
     results = []
 
@@ -503,7 +392,7 @@ def search_news(
             print(f"GNews search error: {e}")
 
     try:
-        url = f"https://www.reddit.com/search.json?q={requests.utils.quote(q)}&sort=relevance&limit=15&type=link"
+        url = f"https://www.reddit.com/search.json?q={requests.utils.quote(q)}&sort=new&limit=100&type=link"
         r = requests.get(url, headers=REDDIT_HEADERS, timeout=10)
         data = r.json()
         for post in data.get("data", {}).get("children", []):
@@ -529,12 +418,8 @@ def search_news(
     except Exception as e:
         print(f"Reddit search error: {e}")
 
-    return {
-        "status": "success",
-        "data": results,
-        "has_more": len(results) >= limit,
-        "next_page": page + 1 if len(results) >= limit else None,
-    }
+    add(fetch_rss(q, search=True))
+    return results
 
 
 # ── ARTICLE READER ────────────────────────────────────────────────────────────
@@ -545,130 +430,19 @@ class ArticleRequest(BaseModel):
 @app.post("/api/read")
 def read_and_summarize(req: ArticleRequest):
     try:
-        article = Article(req.url, language='en')
-        try:
-            article.download()
-        except Exception:
-            resp = requests.get(req.url, headers=DEFAULT_REQUEST_HEADERS, timeout=10)
-            resp.raise_for_status()
-            article.set_html(resp.text)
-        article.parse()
-        clean_text = (article.text or "").strip()
-        if not clean_text:
-            return {"status": "error", "message": "Could not extract text from this site."}
-        free_summary = None
-        try:
-            article.nlp()
-            free_summary = getattr(article, 'summary', None)
-        except Exception:
-            pass
-        return {
-            "status": "success",
-            "data": {
-                "title": article.title,
-                "full_text": clean_text,
-                "ai_summary": free_summary,
-            }
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "success", "data": read_article(req.url)}
+    except (ValueError, requests.RequestException, OSError):
+        return {"status": "error", "message": "This publisher could not be loaded. Open the original article to continue reading."}
 
 
-# ── BOOKMARKS ─────────────────────────────────────────────────────────────────
-
-class BookmarkRequest(BaseModel):
-    title: str
-    url: str
-    image_url: str | None = None
-    ai_summary: str | None = None
-    collection_id: int | None = None
-
-@app.get("/api/bookmarks")
-def get_bookmarks(collection_id: Optional[int] = Query(default=None)):
+@app.get("/api/article-preview")
+def article_preview(url: str = Query(..., max_length=4096)):
     try:
-        if supabase is None:
-            items = _load_json(LOCAL_BOOKMARKS_FILE)
-            if collection_id is not None:
-                items = [i for i in items if i.get('collection_id') == collection_id]
-            return {"status": "success", "data": items}
-        query = supabase.table('bookmarks').select('*')
-        if collection_id is not None:
-            query = query.eq('collection_id', collection_id)
-        return {"status": "success", "data": query.execute().data}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@app.post("/api/bookmarks")
-def create_bookmark(req: BookmarkRequest):
-    try:
-        payload = {"title": req.title, "url": req.url, "image_url": req.image_url,
-                   "ai_summary": req.ai_summary, "collection_id": req.collection_id}
-        if supabase is None:
-            items = _load_json(LOCAL_BOOKMARKS_FILE)
-            next_id = 1 + max((i.get('id') or 0) for i in items) if items else 1
-            item = {"id": next_id, **payload}
-            items.append(item)
-            _save_json(LOCAL_BOOKMARKS_FILE, items)
-            return {"status": "success", "data": item}
-        res = supabase.table('bookmarks').insert(payload).execute()
-        return {"status": "success", "data": res.data}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@app.delete("/api/bookmarks/{bookmark_id}")
-def delete_bookmark(bookmark_id: int):
-    try:
-        if supabase is None:
-            items = _load_json(LOCAL_BOOKMARKS_FILE)
-            remaining = [i for i in items if int(i.get('id', 0)) != bookmark_id]
-            _save_json(LOCAL_BOOKMARKS_FILE, remaining)
-            return {"status": "success"}
-        supabase.table('bookmarks').delete().eq('id', bookmark_id).execute()
-        return {"status": "success"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        data = read_article(url)
+        return {"status": "success", "data": {"image_url": data["image_url"]}}
+    except (ValueError, requests.RequestException, OSError):
+        return {"status": "success", "data": {"image_url": None}}
 
 
-# ── COLLECTIONS ───────────────────────────────────────────────────────────────
-
-class CollectionRequest(BaseModel):
-    name: str
-    color: str | None = "#c4451e"
-
-@app.get("/api/collections")
-def get_collections():
-    try:
-        if supabase is None:
-            return {"status": "success", "data": _load_json(LOCAL_COLLECTIONS_FILE)}
-        return {"status": "success", "data": supabase.table('collections').select('*').execute().data}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@app.post("/api/collections")
-def create_collection(req: CollectionRequest):
-    try:
-        payload = {"name": req.name, "color": req.color}
-        if supabase is None:
-            items = _load_json(LOCAL_COLLECTIONS_FILE)
-            next_id = 1 + max((i.get('id') or 0) for i in items) if items else 1
-            item = {"id": next_id, **payload}
-            items.append(item)
-            _save_json(LOCAL_COLLECTIONS_FILE, items)
-            return {"status": "success", "data": item}
-        res = supabase.table('collections').insert(payload).execute()
-        return {"status": "success", "data": res.data}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@app.delete("/api/collections/{collection_id}")
-def delete_collection(collection_id: int):
-    try:
-        if supabase is None:
-            items = _load_json(LOCAL_COLLECTIONS_FILE)
-            remaining = [i for i in items if int(i.get('id', 0)) != collection_id]
-            _save_json(LOCAL_COLLECTIONS_FILE, remaining)
-            return {"status": "success"}
-        supabase.table('collections').delete().eq('id', collection_id).execute()
-        return {"status": "success"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+from .saved import router as saved_router
+app.include_router(saved_router)
