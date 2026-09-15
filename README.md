@@ -112,6 +112,10 @@ For the current database migrations and authentication setup, follow
 
 ## Environment Variables
 
+All values shown below are example placeholders, not working credentials.
+Store real credentials only in local ignored `.env` files or your hosting
+provider's environment settings. Never commit them to Git.
+
 ### Backend (`backend/.env`)
 
 | Variable | Description | Example |
@@ -120,7 +124,7 @@ For the current database migrations and authentication setup, follow
 | `VITE_SUPABASE_URL` | Supabase project URL | `https://proj.supabase.co` |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon key (fallback) | `sb_publishable_...` |
 | `SUPABASE_URL` | Supabase project URL (primary) | `https://proj.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role (if available) | `eyJhbGc...` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role (if available) | `YOUR_SERVER_ONLY_KEY` |
 | `DATABASE_URL` | PostgreSQL connection string (optional) | `postgresql://...` |
 
 ### Frontend (`frontend/.env`)
